@@ -130,6 +130,23 @@ in
       '';
     };
 
+    workingDir = mkOption {
+      type = types.str;
+      default = "/var/lib/${(import ./constants.nix).name}";
+      description = ''
+        The working directory for the VM. This is where the VM's data, SSH keys,
+        and disk image are stored. Defaults to `/var/lib/rosetta-builder`.
+
+        Change this to relocate the guest data to an external or larger volume.
+        The directory is created automatically by the daemon.
+
+        ⚠️ Changing this option destroys the existing guest VM. The daemon
+        detects a working-directory change (via the generated lima.yaml) and
+        runs `limactl delete --force` then `limactl create` — the guest's own
+        Nix store is lost and must be rebuilt.
+      '';
+    };
+
     sshProtocol = mkOption {
       type = types.enum [
         "ssh"
@@ -187,7 +204,7 @@ in
       sshGlobalKnownHostsFileName = "ssh_known_hosts";
       sshHost = name; # no prefix because it's user visible (in `sudo ssh '${sshHost}'`)
       sshHostKeyAlias = "${sshHost}-key";
-      workingDirPath = "/var/lib/${name}";
+      workingDirPath = cfg.workingDir;
 
       gidSh = escapeShellArg (toString darwinGid);
       groupSh = escapeShellArg darwinGroup;
