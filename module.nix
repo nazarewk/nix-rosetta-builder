@@ -386,9 +386,6 @@ in
             pkgs.openssh
           ];
           text = ''
-            # shellcheck disable=SC2016,SC2029
-            # `$system` must expand on the CLIENT side, so it is interpolated into the remote
-            # command on purpose; shellcheck cannot tell that apart from a mistake.
             set -eu
 
             system=${escapeShellArg "${imageWithFinalConfig.toplevel}"}
@@ -397,10 +394,12 @@ in
             nix copy --to ${escapeShellArg "ssh-ng://${sshHost}"} "$system"
 
             printf >&2 'switching the guest to %s...\n' "$system"
+            # `$system` must expand here, on the client, so the remote command is built locally.
+            # shellcheck disable=SC2029
             ssh ${escapeShellArg sshHost} \
               "sudo nix-env -p /nix/var/nix/profiles/system --set $system && sudo $system/bin/switch-to-configuration switch"
 
-            printf >&2 'guest switched. A kernel or initrd change needs `ssh ${sshHost} sudo reboot`.\n'
+            printf >&2 'guest switched. A kernel or initrd change needs a reboot inside the guest: ssh %s sudo reboot\n' ${escapeShellArg sshHost}
           '';
         };
 
