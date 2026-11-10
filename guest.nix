@@ -144,8 +144,11 @@ in
           "flakes"
           "nix-command"
         ];
-        min-free = "5G";
-        max-free = "7G";
+        # Byte counts, not size strings: Lix (unlike CppNix 2.34) rejects `5G` here with
+        # "setting 'min-free' has invalid value", which fails the whole `nix.conf` and the guest
+        # build with it. Plain integers mean the same to both implementations.
+        min-free = 5 * 1024 * 1024 * 1024;
+        max-free = 7 * 1024 * 1024 * 1024;
         trusted-users = [ cfg.linuxUser ];
       };
     };
