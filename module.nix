@@ -195,6 +195,28 @@ in
       '';
     };
 
+    guest.image = mkOption {
+      type = types.package;
+      readOnly = true;
+      description = ''
+        The bootstrap disk image (a qcow2) for a NEW guest.
+
+        `mode = "standalone"` keeps this out of the host's closure on purpose: the running guest is
+        updated in place, and the image is only read by `limactl create`. Build it on demand and
+        install it with `nix-rosetta-builder.guest.installImage`.
+      '';
+    };
+
+    guest.installImage = mkOption {
+      type = types.package;
+      readOnly = true;
+      description = ''
+        A script that builds `guest.image` and points the stable image path at it. Run it as root
+        before the first guest creation, or whenever the bootstrap image should be refreshed. It
+        does not touch a running guest.
+      '';
+    };
+
     guest.switch = mkOption {
       type = types.package;
       readOnly = true;
@@ -379,6 +401,26 @@ in
           '';
         };
 
+        nix-rosetta-builder.guest.image = imageWithFinalConfig;
+
+        nix-rosetta-builder.guest.installImage = pkgs.writeShellApplication {
+          name = "${name}-guest-install-image";
+          runtimeInputs = [
+            pkgs.coreutils
+          ];
+          text = ''
+            set -eu
+
+            image=${escapeShellArg imageStorePath}
+            target=${escapeShellArg imageLocation}
+
+            printf >&2 'installing %s -> %s\n' "$target" "$image"
+            mkdir -p "$(dirname "$target")"
+            ln -sfn "$image" "$target.tmp"
+            mv -f "$target.tmp" "$target"
+          '';
+        };
+
         environment.etc."ssh/ssh_config.d/100-${sshHost}.conf".text = ''
           Host "${sshHost}"
             GlobalKnownHostsFile "${workingDirPath}/${sshGlobalKnownHostsFileName}"
@@ -460,10 +502,16 @@ in
                 limactl delete --force ${vmNameSh}
 
                 ${optionalString (cfg.mode == "standalone") ''
-                  # The yaml points at this stable path, so it must name the image that is current
-                  # at creation time. `limactl create` copies the image into the instance's
-                  # `basedisk`, so repointing it while a guest runs is harmless.
-                  ln -sfn ${escapeShellArg imageStorePath} ${escapeShellArg imageLocation}
+                  # The yaml points at this stable path. It is populated by
+                  # `nix-rosetta-builder.guest.installImage`, NOT by the host's closure, so a host
+                  # switch never builds the bootstrap image.
+                  if [ ! -e ${escapeShellArg imageLocation} ]; then
+                    printf >&2 \
+                      'error: %s is missing. Build and install the bootstrap image first: %s\n' \
+                      ${escapeShellArg imageLocation} \
+                      ${escapeShellArg "${name}-guest-install-image"}
+                    exit 1
+                  fi
                 ''}
 
                 # must be last so `limactl list` only now succeeds
