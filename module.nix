@@ -391,7 +391,7 @@ in
             system=${escapeShellArg "${imageWithFinalConfig.toplevel}"}
 
             printf >&2 'copying %s to the guest...\n' "$system"
-            nix copy --to ${escapeShellArg "ssh-ng://${sshHost}"} "$system"
+            nix copy --no-check-sigs --to ${escapeShellArg "ssh-ng://${sshHost}"} "$system"
 
             printf >&2 'switching the guest to %s...\n' "$system"
             # `$system` must expand here, on the client, so the remote command is built locally.
