@@ -132,6 +132,12 @@ in
     nix = {
       channel.enable = false;
 
+      # The fleet's clients and builders run Lix, and the `ssh-ng` protocol version is negotiated
+      # between the client's `nix` and the guest's `nix-store --serve`. A guest on plain Nix (2.34
+      # at the time of writing) answers a Lix 2.95 client with "protocol mismatch", so every farm
+      # connection fails before a build is dispatched.
+      package = pkgs.lix;
+
       settings = {
         auto-optimise-store = true;
         experimental-features = [
