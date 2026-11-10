@@ -386,6 +386,9 @@ in
             pkgs.openssh
           ];
           text = ''
+            # shellcheck disable=SC2016,SC2029
+            # `$system` must expand on the CLIENT side, so it is interpolated into the remote
+            # command on purpose; shellcheck cannot tell that apart from a mistake.
             set -eu
 
             system=${escapeShellArg "${imageWithFinalConfig.toplevel}"}
