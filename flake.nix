@@ -39,6 +39,20 @@
         image = self.packages."${linuxSystem}".image;
       };
 
+      # The guest's NixOS configuration as a standalone module. Use it to declare the VM as an
+      # ordinary `nixosConfigurations.<name>` and update it in place
+      # (`nixos-rebuild switch --target-host`), instead of baking a new image per change:
+      #
+      #   nixosConfigurations.rosetta-builder = nixpkgs.lib.nixosSystem {
+      #     system = "aarch64-linux";
+      #     modules = [
+      #       nix-rosetta-builder.nixosModules.default
+      #       { nix-rosetta-builder.guest.allowInPlaceUpdates = true; }
+      #     ];
+      #   };
+      nixosModules.default = ./guest.nix;
+      nixosModules.guest = ./guest.nix;
+
       formatter."${darwinSystem}" = nixpkgs.legacyPackages."${darwinSystem}".nixfmt-rfc-style;
     };
 }

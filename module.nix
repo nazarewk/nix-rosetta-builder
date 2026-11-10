@@ -158,6 +158,53 @@ in
         Options are "ssh" (legacy) or "ssh-ng" (newer protocol with better performance).
       '';
     };
+
+    mode = mkOption {
+      type = types.enum [
+        "ephemeral"
+        "standalone"
+      ];
+      default = "ephemeral";
+      description = ''
+        How the guest's NixOS system is delivered.
+
+        - `ephemeral` (upstream behaviour): the system is baked into the disk image and the image's
+          store path is part of `lima.yaml`. Any guest configuration change therefore changes the
+          generated yaml, and the daemon runs `limactl delete --force` + `create`. The guest's disk
+          and `/nix/store` are discarded — fine for a pure build cache, which is what this VM is.
+
+        - `standalone`: the image is only the bootstrap. `lima.yaml` carries a **stable** image
+          path (`workingDir/image.qcow2`), so a new image does not change the yaml and does not
+          recreate a running guest. The guest's system is exposed as
+          `nix-rosetta-builder.guest.system` and applied in place with
+          `nix-rosetta-builder.guest.switch`, so the disk and the store survive updates. The guest
+          user gains passwordless sudo, which `switch-to-configuration` needs.
+
+          A guest already running in `ephemeral` mode keeps its old disk when the mode flips: the
+          yaml changes once, so the daemon recreates it that one time, and from then on updates are
+          in place.
+      '';
+    };
+
+    guest.system = mkOption {
+      type = types.package;
+      readOnly = true;
+      description = ''
+        The guest's NixOS system closure. `nix build` it, then run
+        `nix-rosetta-builder.guest.switch` as root to copy it into the guest and switch to it.
+      '';
+    };
+
+    guest.switch = mkOption {
+      type = types.package;
+      readOnly = true;
+      description = ''
+        A script that copies `guest.system` into the running guest and runs
+        `switch-to-configuration switch` there. Run it as root (`sudo`), because only root may SSH
+        into the guest by default. A kernel or initrd change still needs a reboot *inside* the
+        guest; lima keeps the same VM, so the disk and store survive.
+      '';
+    };
   };
 
   config =
@@ -180,6 +227,7 @@ in
         onDemand = cfg.onDemand;
         onDemandLingerMinutes = cfg.onDemandLingerMinutes;
         potentiallyInsecureExtraNixosModule = cfg.potentiallyInsecureExtraNixosModule;
+        allowInPlaceUpdates = cfg.mode == "standalone";
       };
 
       cfg = config.nix-rosetta-builder;
@@ -216,6 +264,18 @@ in
 
       workingDirPathSh = escapeShellArg workingDirPath;
 
+      # In `standalone` mode the yaml must not mention the image's store path: a new image would
+      # change it, the daemon's `cmp` would fail, and the guest (with its store) would be recreated.
+      # A stable path inside `workingDir` is repointed just before `limactl create`, which copies the
+      # image into the instance's `basedisk` anyway, so repointing it later is harmless.
+      imageFileName = "image.qcow2";
+      imageLocation =
+        if cfg.mode == "standalone" then
+          "${workingDirPath}/${imageFileName}"
+        else
+          "${imageWithFinalConfig}/${imageWithFinalConfig.passthru.filePath}";
+      imageStorePath = "${imageWithFinalConfig}/${imageWithFinalConfig.passthru.filePath}";
+
       vmYaml = (pkgs.formats.yaml { }).generate "${name}.yaml" {
         # Prevent ~200MiB unused nerdctl-full*.tar.gz download
         # https://github.com/lima-vm/lima/blob/0e931107cadbcb6dbc7bbb25626f66cdbca1f040/pkg/instance/start.go#L43
@@ -227,7 +287,7 @@ in
 
         images = [
           {
-            location = "${imageWithFinalConfig}/${imageWithFinalConfig.passthru.filePath}";
+            location = imageLocation;
           }
         ];
 
@@ -293,6 +353,32 @@ in
           '';
       })
       (mkIf cfg.enable {
+        # The guest's system closure and the in-place switch helper. Both are cheap to evaluate and
+        # only built when a consumer asks for them.
+        nix-rosetta-builder.guest.system = imageWithFinalConfig.toplevel;
+
+        nix-rosetta-builder.guest.switch = pkgs.writeShellApplication {
+          name = "${name}-guest-switch";
+          runtimeInputs = [
+            pkgs.nix
+            pkgs.openssh
+          ];
+          text = ''
+            set -eu
+
+            system=${escapeShellArg "${imageWithFinalConfig.toplevel}"}
+
+            printf >&2 'copying %s to the guest...\n' "$system"
+            nix copy --to ${escapeShellArg "ssh-ng://${sshHost}"} "$system"
+
+            printf >&2 'switching the guest to %s...\n' "$system"
+            ssh ${escapeShellArg sshHost} \
+              "sudo nix-env -p /nix/var/nix/profiles/system --set $system && sudo $system/bin/switch-to-configuration switch"
+
+            printf >&2 'guest switched. A kernel or initrd change needs `ssh ${sshHost} sudo reboot`.\n'
+          '';
+        };
+
         environment.etc."ssh/ssh_config.d/100-${sshHost}.conf".text = ''
           Host "${sshHost}"
             GlobalKnownHostsFile "${workingDirPath}/${sshGlobalKnownHostsFileName}"
@@ -372,6 +458,13 @@ in
                 >${sshGlobalKnownHostsFileNameSh}
 
                 limactl delete --force ${vmNameSh}
+
+                ${optionalString (cfg.mode == "standalone") ''
+                  # The yaml points at this stable path, so it must name the image that is current
+                  # at creation time. `limactl create` copies the image into the instance's
+                  # `basedisk`, so repointing it while a guest runs is harmless.
+                  ln -sfn ${escapeShellArg imageStorePath} ${escapeShellArg imageLocation}
+                ''}
 
                 # must be last so `limactl list` only now succeeds
                 limactl create --name=${vmNameSh} ${vmYamlSh}
